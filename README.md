@@ -1,102 +1,123 @@
-# 📱 PokeDex-MVI
+# PokeDex
 
-> **PokeAPI를 활용한 오프라인 우선(Offline-first) 포켓몬 도감 안드로이드 프로젝트**
+**Kotlin · Jetpack Compose로 구현한 포켓몬 도감 Android 앱**
 
-이 프로젝트는 대규모 앱에서도 유지보수와 테스트가 용이하도록 설계된 **MVI (Model-View-Intent)** 아키텍처와 **멀티 모듈(Multi-Module)** 구조를 실무 수준으로 구현하고, 안정적인 빌드 인프라를 구축하는 데 중점을 두었습니다.
+[PokeAPI](https://pokeapi.co/)에서 포켓몬 정보를 조회하고, 이름 검색·타입 필터·즐겨찾기로 탐색합니다. Room을 목록의 조회 소스로 사용하고 Paging 3의 `RemoteMediator`로 네트워크 데이터를 저장합니다. 화면은 MVI(Model-View-Intent) 계약으로 상태와 사용자 입력을 구분하고, 기능과 데이터 계층을 멀티 모듈로 분리했습니다.
 
----
+이 프로젝트에서 중점적으로 다룬 부분은 **로컬 DB와 네트워크를 연결하는 페이징**, **Flow 기반 화면 상태 관리**, **Convention Plugin을 통한 공통 빌드 설정**입니다.
 
-## 🌟 Key Features
+[설계와 데이터 흐름](docs/architecture.md) · [실행·검증 가이드](docs/development.md)
 
-- **Pokemon Paging List:** `Paging3` 및 `RemoteMediator`를 활용하여 네트워크와 로컬 DB를 동기화하고, 대용량 데이터의 무한 스크롤 최적화.
-- **Search & Filter:** 실시간 이름 검색 및 타입별 필터링을 통한 데이터 탐색 기능.
-- **Offline Support:** `Room` 기반 로컬 캐싱을 통해 네트워크 연결이 없는 환경에서도 끊김 없는 사용자 경험 제공.
-- **Dynamic UI:** 포켓몬 타입별 동적 테마 컬러링 및 `Jetpack Compose` 애니메이션을 활용한 시각적 스탯 정보 제공.
-- **Favorites:** 관심 포켓몬 즐겨찾기 등록 및 관리 기능.
+## 화면
 
----
+| 포켓몬 목록 | 상세 정보 | 즐겨찾기 |
+|:---:|:---:|:---:|
+| <img src="docs/assets/list_screen.png" alt="이름 검색과 타입 필터가 있는 포켓몬 목록" width="240" /> | <img src="docs/assets/detail_screen.png" alt="타입, 능력치, 키와 몸무게를 보여주는 상세 화면" width="240" /> | <img src="docs/assets/favorites_screen.png" alt="즐겨찾기로 등록한 포켓몬 목록" width="240" /> |
 
-## 🛠 Tech Stacks
+## 주요 기능
 
-- **Language:** [Kotlin](https://kotlinlang.org/)
-- **UI:** [Jetpack Compose](https://developer.android.com/jetpack/compose) (Declarative UI)
-- **Architecture:** MVI (Model-View-Intent), Clean Architecture, Multi-Module
-- **Build & Infra:** Kotlin DSL, Convention Plugins (build-logic), Version Catalog
-- **DI:** [Hilt](https://developer.android.com/training/dependency-injection/hilt-android)
-- **Networking:** [Retrofit2](https://square.github.io/retrofit/), OkHttp3, Kotlinx Serialization
-- **Local Storage:** [Room](https://developer.android.com/training/data-storage/room) (SQLite)
-- **Async & Stream:** Coroutines, Flow (StateFlow, SharedFlow)
-- **Image Loading:** [Coil3](https://coil-kt.github.io/coil/)
-- **Pagination:** Paging3 (RemoteMediator for offline caching)
-- **Testing:** [JUnit4](https://junit.org/junit4/), [MockK](https://mockk.io/), [Turbine](https://github.com/cashapp/turbine) (Flow testing)
+| 기능 | 구현 내용 |
+|---|---|
+| 목록 탐색 | 2열 그리드, Paging 3 기반 추가 로딩, 초기 로딩 Shimmer |
+| 검색·필터 | 저장된 포켓몬의 영문 이름 부분 검색과 타입 필터 조합 |
+| 상세 정보 | 이미지, 타입, 기본 능력치, 키·몸무게, 특성 표시 |
+| 즐겨찾기 | 목록에서 등록·해제, 별도 즐겨찾기 화면, Room Flow로 상태 반영 |
+| 시각적 표현 | 첫 번째 타입에 따른 카드·상세 배경색, 능력치 진행 막대 |
+| 로컬 캐시 | DB에 저장된 상세 정보 우선 조회, 미저장 상세 정보는 API 조회 후 저장 |
 
----
+검색·필터는 **현재 DB에 저장된 데이터**를 대상으로 동작합니다. 저장된 정보는 오프라인에서 조회할 수 있으며, 새로운 데이터와 캐시되지 않은 이미지의 로딩에는 네트워크가 필요합니다. 구체적인 캐시·갱신 정책은 [아키텍처 문서](docs/architecture.md)에 정리했습니다.
 
-## 🏗 Architecture & Design
+## 핵심 구현과 설계 선택
 
-### 1. Build Logic & Convention Plugins
+### 1. 목록과 상세에서 같은 로컬 데이터를 사용하기
 
-멀티 모듈 프로젝트의 빌드 복잡도를 제어하기 위해 `build-logic`을 도입하여 **빌드 인프라를 코드로서 관리(IaC)**했습니다.
+목록 API 응답의 각 포켓몬에 대해 상세 API를 병렬 호출하고, 상세 데이터와 페이지 키를 하나의 Room 트랜잭션으로 저장합니다. UI는 API 응답을 직접 그리지 않고 Room의 `PagingSource`를 구독합니다. 상세 화면도 저장된 데이터를 우선 사용하므로 목록에서 받은 정보를 재사용합니다.
 
-- **Convention Plugins:** 반복되는 빌드 설정을 플러그인화하여 모듈 간 일관성 유지 및 유지보수성 극대화.
-- **Type-Safe 의존성 관리:** Version Catalog를 활용하여 라이브러리 버전 파편화 방지.
-- **관심사 분리:** 모듈의 성격(Data, Feature, UI)에 맞는 빌드 로직을 분리하여 `build.gradle.kts` 가독성 개선.
+- [PokemonRemoteMediator](core/data/src/main/kotlin/com/hckim/pokedex/core/data/remotemediator/PokemonRemoteMediator.kt): 페이지 요청, 상세 병렬 조회, 트랜잭션 저장
+- [DefaultPokemonRepository](core/data/src/main/kotlin/com/hckim/pokedex/core/data/repository/DefaultPokemonRepository.kt): Pager 구성, 로컬 우선 상세 조회, 즐겨찾기 처리
 
-### 2. MVI (Model-View-Intent)
+목록을 표시하기 전에 상세 데이터까지 확보하는 대신 페이지당 요청 수가 늘어납니다. 현재 `pageSize = 20`이므로 일반적인 한 페이지 로딩은 목록 1회와 상세 최대 20회의 요청으로 구성됩니다.
 
-상태 파편화(State Fragment)를 방지하고 예측 가능한 UI 상태 관리를 위해 **단방향 데이터 흐름(UDF)**을 보장했습니다.
+### 2. 화면 상태·목록 스트림·화면 이동의 책임 나누기
 
-- **Single Source of Truth:** UI의 모든 상태를 `UiState`라는 단일 객체로 관리하여 데이터 불일치 해결.
-- **Intent-Driven:** 사용자의 액션을 캡슐화하여 비즈니스 로직으로 전달하고, 복잡한 상태 변화를 예측 가능하게 설계.
-- **Side Effect Handling:** 네비게이션, 스낵바 등 휘발성 이벤트를 `UiEffect`로 분리하여 안정적인 처리 프로세스 구축.
+각 기능은 `UiState`, `UiIntent`, `UiEffect` 계약을 정의합니다. 검색어·선택 타입·즐겨찾기 ID는 `StateFlow`, 목록은 별도 `Flow<PagingData<Pokemon>>`, 목록 항목 선택에 따른 상세 화면 이동은 `SharedFlow`로 전달합니다.
 
-### 3. Multi-Module Structure
+검색 조건이 바뀌면 `flatMapLatest`로 새 Pager의 Flow를 구독하고 `cachedIn(viewModelScope)`로 페이징 스트림을 캐시합니다. 화면 경로와 `NavController`는 `app`에서 관리하고, feature에는 이동 콜백을 전달합니다.
 
-관심사 분리(SoC)와 빌드 속도 최적화를 위해 기능 및 레이어별로 모듈 결합도를 낮췄습니다.
+- [PokemonListViewModel](feature/list/src/main/kotlin/com/hckim/pokedex/feature/list/PokemonListViewModel.kt)
+- [MviViewModel](core/common/src/main/kotlin/com/hckim/pokedex/core/common/base/MviViewModel.kt)
+- [PokeDexNavGraph](app/src/main/kotlin/com/hckim/pokedex/PokeDexNavGraph.kt)
 
-- **`app`**: 통합 모듈. DI 진입점 및 전체 네비게이션 관리.
-- **`build-logic`**: Convention Plugins를 통한 빌드 인프라 관리.
-- **`core:common`**: 프로젝트 전반에서 재사용되는 확장 함수, 유틸리티 및 공통 인터페이스.
-- **`core:data`**: 리포지토리 패턴을 통해 다양한 데이터 소스(Network, Database)를 통합 및 관리.
-- **`core:database`**: Room 기반의 로컬 영속성 관리 및 데이터베이스 엔티티 정의.
-- **`core:designsystem`**: 공통 UI 컴포넌트, 테마(Color, Typography), 디자인 가이드라인 정의.
-- **`core:domain`**: 비즈니스 로직 및 UseCase 정의. 프레임워크 의존성이 없는 Pure Kotlin 모듈.
-- **`core:model`**: 프로젝트 전반에서 사용되는 공통 도메인 모델 및 Enum 정의.
-- **`core:network`**: Retrofit 기반의 외부 API 통신 및 네트워크 데이터 모델 정의.
-- **`core:ui`**: 디자인 시스템 기반의 공통 UI 컴포넌트 및 복합 UI 로직 관리.
-- **`feature:*`**: 기능 단위 모듈 (`list`, `detail`, `favorites`). UI 로직(Compose) 및 ViewModel 포함.
+### 3. 모듈별 빌드 설정의 반복 줄이기
 
----
+Android/JVM, Compose, Hilt, Room, feature 공통 설정을 `build-logic`의 Convention Plugin으로 구성했습니다. 모듈에서는 필요한 플러그인과 개별 의존성을 선언하고, SDK·JVM target·공통 테스트 설정은 빌드 로직에서 관리합니다. 라이브러리 버전은 Version Catalog에 모았습니다.
 
-## 🧪 Testing Strategy
+- [Convention Plugin 정의](build-logic/convention/build.gradle.kts)
+- [Version Catalog](gradle/libs.versions.toml)
 
-신뢰성 있는 앱을 위해 계층별 테스트 전략을 수립하고 자동화된 검증 환경을 구축했습니다.
+## 모듈 구성
 
-- **Unit Testing:** `JUnit4` 및 `MockK`를 활용하여 UseCase와 Repository의 비즈니스 로직 정합성 검증.
-- **MVI State Flow Testing:** `Turbine`을 활용하여 사용자 Intent에 따른 `UiState`의 변화와 `UiEffect` 방출의 순차적 흐름 검증.
-- **Coroutine Test:** `kotlinx-coroutines-test`의 `runTest`를 도입하여 비동기 작업에 대한 결정론적 테스트 수행.
-- **Behavioral Verification:** UseCase가 Repository와 상호작용할 때 의도한 횟수만큼 올바르게 호출되는지 검증.
+| 모듈 | 역할 |
+|---|---|
+| `app` | 앱 진입점, Hilt 조립, 화면 경로와 NavHost |
+| `feature:list` / `detail` / `favorites` | 기능별 Compose 화면, ViewModel, MVI 계약 |
+| `core:domain` / `model` | Repository 인터페이스, UseCase, 공통 모델 |
+| `core:data` / `network` / `database` | Repository 구현, 페이징, API 통신, 로컬 저장 |
+| `core:ui` / `designsystem` | 공통 컴포넌트와 Compose 테마 |
+| `core:common` | MVI 계약과 공통 Coroutine 설정 |
+| `build-logic` | 공통 빌드 설정을 제공하는 별도 included build |
 
----
+feature 간 직접 의존성 없이 `app`에서 화면을 연결합니다. 실제 의존 방향과 계층별 절충은 [아키텍처 문서](docs/architecture.md)에서 설명합니다.
 
-## 🚀 Technical Challenges & Learnings
+## 기술 구성
 
-- **RemoteMediator를 통한 오프라인 최적화:** 네트워크와 로컬 DB 사이의 동기화 전략을 구축하여 데이터 신뢰성 확보.
-- **멀티 모듈 네비게이션 설계:** 모듈 간 결합도를 낮추면서 유연한 화면 이동을 보장하기 위한 라우팅 인터페이스 설계 및 적용.
-- **Convention Plugins 도입:** 빌드 로직의 중복을 제거하고 모듈 확장 시 빌드 설정 비용을 획기적으로 단축.
+세부 버전은 [Version Catalog](gradle/libs.versions.toml)와 [Gradle Wrapper](gradle/wrapper/gradle-wrapper.properties), 실행 환경은 [개발·검증 가이드](docs/development.md)에서 확인할 수 있습니다.
 
----
+| 영역 | 사용 기술 |
+|---|---|
+| 언어·비동기 | Kotlin, Coroutines, Flow |
+| UI | Jetpack Compose, Material 3, Navigation Compose |
+| 데이터 | Room, Paging 3 |
+| 네트워크·이미지 | Retrofit, OkHttp, Kotlin Serialization, Coil |
+| DI·코드 생성 | Hilt, KSP |
+| 빌드 | AGP, Gradle, Kotlin DSL, Convention Plugins |
+| 테스트 | JUnit 4, MockK, Turbine, kotlinx-coroutines-test |
 
-## 📸 Screenshots
+## 실행 방법
 
-|                       포켓몬 리스트                        |                         상세 정보                          |                           즐겨찾기                            |
-|:----------------------------------------------------:|:------------------------------------------------------:|:---------------------------------------------------------:|
-| <img src="screenshots/list_screen.png" width="250"/> | <img src="screenshots/detail_screen.png" width="250"/> | <img src="screenshots/favorites_screen.png" width="250"/> |
+1. 저장소를 클론하고 Android Studio에서 엽니다.
+2. **JDK 21**, **Android SDK Platform 37**, **SDK Build Tools 36.0.0**을 준비합니다. Android Studio는 AGP 9.1.1을 지원하는 버전을 사용합니다.
+3. SDK 경로가 설정된 `local.properties`를 준비하고 Gradle Sync 후 `app`을 실행합니다. 기본 API URL은 `https://pokeapi.co/api/v2/`이며 별도 API 키 설정은 없습니다.
 
----
+```powershell
+git clone https://github.com/hckim-dev/PokeDex.git
+cd PokeDex
+.\gradlew.bat :app:assembleDebug
+```
 
-## 🛠 Getting Started
+최소 실행 버전은 Android 8.0(API 26), `compileSdk`와 `targetSdk`는 37입니다. macOS/Linux 명령, API URL 변경, APK 위치와 환경 문제 해결은 [개발·검증 가이드](docs/development.md)에 정리했습니다. Build Tools 기본값은 [AGP 9.1 공식 호환성 문서](https://developer.android.com/build/releases/agp-9-1-0-release-notes)를 참고했습니다.
 
-1. 이 저장소를 클론합니다.
-2. Android Studio (Ladybug 이상 권장)에서 프로젝트를 엽니다.
-3. Gradle Sync를 완료한 후 `app` 모듈을 실행합니다.
+## 테스트
+
+프로젝트 동작을 대상으로 **로컬 단위 테스트 19개**와 **Room DAO 계측 테스트 2개**를 작성했습니다. 기본 생성된 예제 테스트는 이 수에 포함하지 않았습니다.
+
+| 대상 | 작성된 테스트의 범위 |
+|---|---|
+| UseCase | Repository 위임, 반환값·Flow 전달 |
+| Repository | 즐겨찾기 추가·삭제 분기, 즐겨찾기 Flow 전달 |
+| ViewModel | 검색어·타입·즐겨찾기 상태, 상세 조회 성공·실패, 상세 이동 Effect |
+| Room DAO | In-memory DB에서 포켓몬 삽입·조회와 즐겨찾기 추가·삭제 |
+
+```powershell
+.\gradlew.bat :core:domain:test :core:data:testDebugUnitTest :feature:list:testDebugUnitTest :feature:detail:testDebugUnitTest :feature:favorites:testDebugUnitTest
+```
+
+**2026-10-23 검증 결과:** Debug APK 빌드와 위 단위 테스트 19개가 모두 통과했습니다. Room 계측 테스트와 실제 기기 UI 동작은 해당 검증에서 실행하지 않았습니다. 계층별 테스트 수, 미검증 범위와 수동 확인 절차는 [개발·검증 가이드](docs/development.md)에 있습니다.
+
+## 개선 과제
+
+- 목록 새로고침으로 캐시가 교체되어도 즐겨찾기 항목이 계속 표시되도록 보존 정책 보완
+- Paging·상세 조회 오류의 사용자 표시, 재시도와 빈 결과 UI 보완
+- Room 스키마 내보내기와 명시적 Migration, RemoteMediator 회귀 테스트 추가
+
+현재 정책과 제약의 근거는 [아키텍처 문서](docs/architecture.md)에 정리했습니다.
